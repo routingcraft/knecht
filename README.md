@@ -8,14 +8,19 @@
 
 * [Nodes and topology configs](#Nodes-and-topology-configs)
 
-```
-[Connecting 3rd party devices](#Connecting 3rd party devices)
+* [Using the lab](#Using-the-lab)
 
-[Connect a VM](##Connect a VM)
+[Connecting 3rd party devices](#Connecting-3rd-party-devices)
 
-[Connect a docker container](##Connect a docker container)
-```
+* [Connect a VM](#Connect-a-VM)
 
+* [Connect a docker container](#Connect-a-docker-container)
+
+* [Connect a physical interface](#Connect-a-physical-interface)
+
+* [Connect a remote device over VXLAN](#Connect-a-remote-device-over-VXLAN)
+
+[Tcpdump/Wireshark](#Tcpdump/Wireshark)
 
 # Introduction
 
