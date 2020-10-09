@@ -20,7 +20,7 @@
 
 * [Connect a remote device over VXLAN](#Connect-a-remote-device-over-VXLAN)
 
-[Tcpdump/Wireshark](#Tcpdump/Wireshark)
+[Tcpdump/Wireshark](#Tcpdump-Wireshark)
 
 # Introduction
 
