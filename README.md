@@ -36,6 +36,12 @@
 
   - [Option 1: manually create basic config](#Option-1-manually-create-basic-config)
 
+  - [Option 2: use script to generate config](#Option-2-use-script-to-generate-config)
+
+[Limitations](#Limitations)
+
+[Troubleshooting](#Troubleshooting)
+
 
 # Introduction
 
