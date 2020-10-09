@@ -398,7 +398,7 @@ interface Vxlan1
 This will bridge all untagged traffic between R2 and physical hosts connected to Arista access ports on vlan 1, using VNI 1. It is possible to bridge only tagged traffic for some vlans by configuring VXLAN:VNI mappings.
 
 
-# Tcpdump/Wireshark
+# Tcpdump and Wireshark
 
 Check bridge name for the given net:
 
