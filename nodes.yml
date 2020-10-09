@@ -1,0 +1,20 @@
+- R1:
+    type: iosxe 
+    version: latest 
+    vcpu: 1
+    memory: 3072
+- R2:
+    type: iosxrv
+    version: latest
+- SW1:
+    type: eos 
+- SW2:
+    type: eos
+    version: 4.20.15M 
+    vcpu: 1
+    memory: 2048
+    network_driver: e1000
+- R3:
+    type: junosvmx
+    version: 18.3R1.9
+

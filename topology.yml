@@ -1,0 +1,16 @@
+- net1:
+    SW1: 1
+    SW2: 1
+- net2:
+    SW1: 2
+    SW2: 2
+- net3:
+    R1: 3
+    SW1: 3
+- net4:
+    R2: 3 
+    SW2: 3
+- net5:
+    SW1: 4
+    SW2: 4
+    R3: 2

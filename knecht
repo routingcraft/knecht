@@ -1,0 +1,1014 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Apr 19 10:27:32 2018
+
+@author: dima
+"""
+import libvirt
+import xml.etree.ElementTree as ET
+import uuid
+import yaml 
+import shutil
+import os
+from pprint import pprint as pprint
+from napalm import get_network_driver
+from pathlib import Path
+import sys
+import random 
+
+def randomMAC():
+    mac = [ 0x50, 0x16, 0x3e,
+        random.randint(0x00, 0x7f),
+        random.randint(0x00, 0xff),
+        random.randint(0x00, 0xff) ]
+    return ':'.join(map(lambda x: "%02x" % x, mac))
+
+def create_domain_xml(domain_settings, mgmt_network, debug=False):
+    
+    # generate XML config for VM
+    # experimental code, not sure what all these parameters mean
+    # need to clean this up later
+    
+    print("Generating KVM XML config for " + domain_settings["hostname"])
+    
+    genUUID = str(uuid.uuid1())
+
+    
+    domainxml = ET.Element("domain", type="kvm")
+    
+    namexml = ET.SubElement(domainxml, "name").text = domain_settings["hostname"]
+    uuidxml = ET.SubElement(domainxml, "uuid").text = genUUID
+    if debug == True:
+        print("Generated UUID " + genUUID + " for " + domain_settings["hostname"])
+    memoryxml = ET.SubElement(domainxml, "memory", unit="MB").text = str(domain_settings["memory"])                
+    currentMemoryxml = ET.SubElement(domainxml, "currentMemory", unit="MB").text = str(domain_settings["memory"])
+    if debug == True:
+        print(domain_settings["hostname"] + " has " + str(domain_settings["memory"]) + " MB of memory")    
+    vcpuxml = ET.SubElement(domainxml, "vcpu", placement="static").text = str(domain_settings["vcpu"])
+    if debug == True:
+        print(domain_settings["hostname"] + " has " + str(domain_settings["vcpu"]) + " vCPU")
+
+    # XRv9k doesn't like some CPU, interfaces might not show up. Setting CPU model to Nehalem as a workaround
+    if domain_settings["type"] == "iosxrv9000":
+        cpuxml = ET.SubElement(domainxml, "cpu", mode="custom")
+        cpumodelxml = ET.SubElement(cpuxml, "model").text = "Nehalem"
+
+
+    osxml = ET.SubElement(domainxml, "os")
+    osTypexml = ET.SubElement(osxml, "type").text = "hvm"
+    if domain_settings["type"] == "eos":
+        osBootxml = ET.SubElement(osxml, "boot", dev="cdrom")
+    osBootxml = ET.SubElement(osxml, "boot", dev="hd")
+    
+    featuresxml = ET.SubElement(domainxml, "features")
+    acpixml = ET.SubElement(featuresxml, "acpi")
+    apicxml = ET.SubElement(featuresxml, "apic")
+    paexml = ET.SubElement(featuresxml, "pae")
+    
+    clockxml = ET.SubElement(domainxml, "clock", offset="utc")
+    poweroffxml = ET.SubElement(domainxml, "on_poweroff").text = "destroy"
+    rebootxml = ET.SubElement(domainxml, "on_reboot").text = "restart"
+    crashxml = ET.SubElement(domainxml, "on_crash").text = "restart"
+    
+    devicesxml = ET.SubElement(domainxml, "devices")
+    
+    emulatorxml = ET.SubElement(devicesxml, "emulator").text = "/usr/bin/kvm"
+    
+    # juniper is special...
+    if domain_settings["type"] == "vmx-vcp":
+        # vda
+        diskxml = ET.SubElement(devicesxml, "disk", type="file", device="disk")
+        driverxml = ET.SubElement(diskxml, "driver", name="qemu", type="qcow2", cache="writethrough")
+        sourcexml = ET.SubElement(diskxml, "source", file=domain_settings["image_path_dict"]["dst_path_vcp_a"])
+        if debug == True:
+            print(domain_settings["hostname"] + " will boot from " + domain_settings["image_path_dict"]["dst_path_vcp_a"])
+        targetxml = ET.SubElement(diskxml, "target", dev="vda", bus="ide")
+        # vdb
+        diskxml = ET.SubElement(devicesxml, "disk", type="file", device="disk")
+        driverxml = ET.SubElement(diskxml, "driver", name="qemu", type="qcow2", cache="writethrough")
+        sourcexml = ET.SubElement(diskxml, "source", file=domain_settings["image_path_dict"]["dst_path_vcp_b"])
+        if debug == True:
+            print(domain_settings["hostname"] + " secondary disk is" + domain_settings["image_path_dict"]["dst_path_vcp_b"])
+        targetxml = ET.SubElement(diskxml, "target", dev="vdb", bus="ide")
+        # vbc
+        diskxml = ET.SubElement(devicesxml, "disk", type="file", device="disk")
+        driverxml = ET.SubElement(diskxml, "driver", name="qemu", type="raw", cache="writethrough")
+        sourcexml = ET.SubElement(diskxml, "source", file=domain_settings["image_path_dict"]["dst_path_vcp_c"])
+        if debug == True:
+            print(domain_settings["hostname"] + " tertiary disk is " + domain_settings["image_path_dict"]["dst_path_vcp_c"])
+        targetxml = ET.SubElement(diskxml, "target", dev="vdc", bus="ide")
+        
+    else:
+        # HDD config
+        diskxml = ET.SubElement(devicesxml, "disk", type="file", device="disk")
+        # juniper vFP
+        if domain_settings["type"] == "vmx-vfp":
+            driverxml = ET.SubElement(diskxml, "driver", name="qemu", type="raw", cache="writethrough")
+        else:
+            driverxml = ET.SubElement(diskxml, "driver", name="qemu", type="qcow2", cache="writethrough")
+        # create disk image from a template
+
+        sourcexml = ET.SubElement(diskxml, "source", file=domain_settings["image"])
+        if debug == True:
+            print(domain_settings["hostname"] + " will boot from " + domain_settings["image"])
+            
+        targetxml = ET.SubElement(diskxml, "target", dev="vda", bus="ide")
+ 
+    #controllerxml = ET.SubElement(devicesxml, "controller", type="pci", index="0", model="pci-root")
+    
+    # CD-ROM config - only for vEOS
+    
+    if domain_settings["type"] == "eos":
+        
+        diskxml = ET.SubElement(devicesxml, "disk", type="file", device="cdrom")
+        driverxml = ET.SubElement(diskxml, "driver", name="qemu", type="raw")
+
+        sourcexml = ET.SubElement(diskxml, "source", file=domain_settings["aboot_path"])
+        targetxml = ET.SubElement(diskxml, "target", dev="vdb", bus="ide")
+        ET.SubElement(diskxml, "readonly")
+    #controllerxml = ET.SubElement(devicesxml, "controller", type="pci", index="0", model="pci-root")
+    
+    # network config
+    # first interface is configured for management and connected to the default network
+    
+    interfacexml = ET.SubElement(devicesxml, "interface", type="network")
+    
+    # EOS wants U/L bit in MAC address to be set to 1, otherwise MLAG crashes
+    
+    if domain_settings["type"] == "eos":
+        macxml = ET.SubElement(interfacexml, "mac", address=randomMAC())
+    sourcexml = ET.SubElement(interfacexml, "source", network=mgmt_network)
+    modelxml = ET.SubElement(interfacexml, "model", type=domain_settings["network_driver"])
+    if debug == True:
+        print(domain_settings["hostname"] + " has management interface type \"" + str(domain_settings["network_driver"]) + "\" on network \"" + mgmt_network + "\"")
+        
+    # create vCP-vFP communication link for vMX
+    if domain_settings["type"] == "vmx-vcp" or domain_settings["type"] == "vmx-vfp" or domain_settings["type"] == "vqfx-re" or domain_settings["type"] == "vqfx-pfe":
+        interfacexml = ET.SubElement(devicesxml, "interface", type="network")
+        sourcexml = ET.SubElement(interfacexml, "source", network=domain_settings["jnet"])
+        modelxml = ET.SubElement(interfacexml, "model", type=domain_settings["network_driver"])
+        if debug == True:
+            print("Configuring network adapter type \"" + str(domain_settings["network_driver"]) + "\" on network \"" + str(domain_settings["jnet"]) + "\"")
+
+
+    if domain_settings["type"] != "vmx-vcp":
+        nets = []
+        for network_number in domain_settings["network"]:
+            nets.append(network_number)
+        nets.sort()
+        # create a dummy ge-0/0/0 for VFP so real interfaces start from ge-0/0/1
+        if domain_settings["type"] == "vmx-vfp" or domain_settings["type"] == "iosxrv":
+            interfacexml = ET.SubElement(devicesxml, "interface", type="network")
+            modelxml = ET.SubElement(interfacexml, "model", type=domain_settings["network_driver"])
+            sourcexml = ET.SubElement(interfacexml, "source", network="default")
+            linkxml = ET.SubElement(interfacexml, "link", state="down")
+        elif domain_settings["type"] == "iosxrv9000":
+            for i in range (1, 4):
+                interfacexml = ET.SubElement(devicesxml, "interface", type="network")
+                modelxml = ET.SubElement(interfacexml, "model", type=domain_settings["network_driver"])
+                sourcexml = ET.SubElement(interfacexml, "source", network="default")
+                linkxml = ET.SubElement(interfacexml, "link", state="down")
+
+
+        # now start creating real interfaces
+        for i in range(1,nets[-1]+1):
+            # skip interface 1 for IOS-XE
+            if i == 1 and domain_settings["type"] == "iosxe":
+                continue
+            interfacexml = ET.SubElement(devicesxml, "interface", type="network")
+            if domain_settings["type"] == "eos":
+                macxml = ET.SubElement(interfacexml, "mac", address=randomMAC())
+            modelxml = ET.SubElement(interfacexml, "model", type=domain_settings["network_driver"])
+            if i in nets:
+                sourcexml = ET.SubElement(interfacexml, "source", network=domain_settings["network"][i])
+                if debug == True:
+                    print("Configuring network adapter type \"" + str(domain_settings["network_driver"]) + "\" on network \"" + str(domain_settings["network"][i]) + "\"")
+            else:
+                sourcexml = ET.SubElement(interfacexml, "source", network="default")
+                linkxml = ET.SubElement(interfacexml, "link", state="down")  
+    
+    
+    
+    serialxml = ET.SubElement(devicesxml, "serial", type="pty")
+    sourcexml = ET.SubElement(serialxml, "source", path="/dev/pts/0")
+    targetxml = ET.SubElement(serialxml, "target", port="0")
+    aliasxml = ET.SubElement(serialxml, "alias", name="serial0")
+    
+    consolexml = ET.SubElement(devicesxml, "console", type="pty", tty="/dev/pts/0")
+    sourcexml = ET.SubElement(consolexml, "source", path="/dev/pts/0")
+    targetxml = ET.SubElement(consolexml, "target", port="0", type="serial")
+    aliasxml = ET.SubElement(consolexml, "alias", name="serial0")  
+
+
+    domain_xml_config = ET.tostring(domainxml)
+    domain_xml_config = str(domain_xml_config)[2:-1]
+    
+    if debug == True:
+        print("\n")
+        print("The final XML KVM config is: \n")
+        pprint(domain_xml_config)
+        print("\n")
+
+    return domain_xml_config
+
+
+def create_network_xml(name, debug=False):
+    
+    # generate XML config for the given network
+    if debug == True:        
+        print("Generating XML config for network \"" + name +  "\"")
+    
+    # a bit of monkey code, relies on network to be called "netX" where X is a number
+    # need to change later
+    # also "net0" might break libvirt networking as virbr0 is used for default network
+    # now even worse, because of the need for vCP-vFP network for juniper vMX
+    
+    if name[:4] == "jnet":
+        virbr = "j-virbr" + name[4:]
+    elif name[:3] == "net":
+        virbr = "virbr" + name[3:]
+    else:
+        print("Network name must be netX in topology.yml")
+        
+    netxml = ET.Element("network")
+    
+    namexml = ET.SubElement(netxml, "name").text = name
+    bridgexml = ET.SubElement(netxml, "bridge", name=virbr, stp="off")
+    mtuxml = ET.SubElement(netxml, "mtu", size="10000") 
+    network_xml_config = ET.tostring(netxml)
+    network_xml_config = str(network_xml_config)[2:-1]
+
+    if debug == True:
+        print("\n")
+        print("The final XML network config is: \n")
+        pprint(network_xml_config)
+        print("\n")
+        
+    return network_xml_config, virbr
+
+
+
+def clone_image(hostname, image_type, version, global_settings, known_images):
+    
+    if global_settings["debug"] == True:
+        print("Cloning image for " + hostname + " type " + image_type)
+    
+    if image_type == "junosvmx":
+        
+        junosvmx_dirs = []
+        image_path_dict = {}
+        for dir in os.listdir(global_settings["image_dir"]):
+            if dir[:8] == "junosvmx":
+                junosvmx_dirs.append(dir)
+        junosvmx_dirs.sort()
+
+        if version  == "latest":
+            if len(junosvmx_dirs) == 0:
+                print("No directories with vMX found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path_vcp_a = global_settings["image_dir"] + "/" + junosvmx_dirs[-1] + "/virtioa.qcow2"
+                src_path_vcp_b = global_settings["image_dir"] + "/" + junosvmx_dirs[-1] + "/virtiob.qcow2"
+                src_path_vcp_c = global_settings["image_dir"] + "/" + junosvmx_dirs[-1] + "/virtioc.qcow2"
+                src_path_vfp = global_settings["image_dir"] + "/" + junosvmx_dirs[-1] + "/vfpc.qcow2"
+        else:
+            if "junosvmx-" + version not in junosvmx_dirs:
+                print("No directory junosvmx-" + version + " found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path_vcp_a = global_settings["image_dir"] + "/junosvmx-" + version + "/virtioa.qcow2"
+                src_path_vcp_b = global_settings["image_dir"] + "/junosvmx-" + version + "/virtiob.qcow2"
+                src_path_vcp_c = global_settings["image_dir"] + "/junosvmx-" + version + "/virtioc.qcow2"
+                src_path_vfp = global_settings["image_dir"] + "/junosvmx-" + version + "/vfpc.qcow2"
+        
+        image_path_dict["dst_path_vcp_a"] = global_settings["working_dir"] + hostname + "-vcp-a" + ".qcow2"
+        image_path_dict["dst_path_vcp_b"] = global_settings["working_dir"] + hostname + "-vcp-b" + ".qcow2"
+        image_path_dict["dst_path_vcp_c"] = global_settings["working_dir"] + hostname + "-vcp-c" + ".img"
+        image_path_dict["dst_path_vfp"] = global_settings["working_dir"] + hostname + "-vfp" + ".img"
+        
+        shutil.copy(src_path_vcp_a, image_path_dict["dst_path_vcp_a"])
+        shutil.copy(src_path_vcp_b, image_path_dict["dst_path_vcp_b"])
+        shutil.copy(src_path_vcp_c, image_path_dict["dst_path_vcp_c"])
+        shutil.copy(src_path_vfp, image_path_dict["dst_path_vfp"])
+            
+        return image_path_dict
+     
+    elif image_type == "eos":
+
+        eos_dirs = []
+        for dir in os.listdir(global_settings["image_dir"]):
+            if dir[:4] == "veos":
+                eos_dirs.append(dir)
+        eos_dirs.sort()
+        if version == "latest":
+            if len(eos_dirs) == 0:
+                print("No directories with vEOS found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/" + eos_dirs[-1] + "/hda.qcow2"
+                aboot_path = global_settings["image_dir"] + "/" + eos_dirs[-1] + "/cdrom.iso"
+        else:
+            if "veos-" + version not in eos_dirs:
+                print("No directory veos-" + version + " found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/veos-" + version + "/hda.qcow2"
+                aboot_path = global_settings["image_dir"] + "/veos-" + version + "/cdrom.iso"
+                
+
+        dst_path = global_settings["working_dir"] + hostname + ".qcow2"
+    
+        shutil.copy(src_path, dst_path)
+        
+        return dst_path, aboot_path
+
+    elif image_type == "iosxrv":
+
+        xrv_dirs = []
+        for dir in os.listdir(global_settings["image_dir"]):
+            if dir[:7] == "iosxrv-":
+                xrv_dirs.append(dir)
+        xrv_dirs.sort()
+        if version == "latest":
+            if len(xrv_dirs) == 0:
+                print("No directories with IOS-XRv found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/" + xrv_dirs[-1] + "/hda.qcow2"
+        else:
+            if "iosxrv-" + version not in xrv_dirs:
+                print("No directory iosxrv-" + version + " found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/iosxrv-" + version + "/hda.qcow2"
+                
+
+        dst_path = global_settings["working_dir"] + hostname + ".qcow2"
+    
+        shutil.copy(src_path, dst_path)
+        
+        return dst_path
+   
+    elif image_type == "iosxrv9000":
+
+        xrv9k_dirs = []
+        for dir in os.listdir(global_settings["image_dir"]):
+            if dir[:10] == "iosxrv9000":
+                xrv9k_dirs.append(dir)
+        xrv9k_dirs.sort()
+        if version == "latest":
+            if len(xrv9k_dirs) == 0:
+                print("No directories with IOS-XRv9000 found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/" + xrv9k_dirs[-1] + "/hda.qcow2"
+        else:
+            if "iosxrv9000-" + version not in xrv9k_dirs:
+                print("No directory iosxrv9000-" + version + " found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/iosxrv9000-" + version + "/hda.qcow2"
+                
+
+        dst_path = global_settings["working_dir"] + hostname + ".qcow2"
+    
+        shutil.copy(src_path, dst_path)
+        
+        return dst_path
+
+    elif image_type == "ios":
+
+        ios_dirs = []
+        for dir in os.listdir(global_settings["image_dir"]):
+            if dir[:4] == "vios":
+                ios_dirs.append(dir)
+        ios_dirs.sort()
+        if version == "latest":
+            if len(ios_dirs) == 0:
+                print("No directories with vIOS found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/" + ios_dirs[-1] + "/hda.qcow2"
+        else:
+            if "vios-" + version not in ios_dirs:
+                print("No directory vios-" + version + " found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/vios-" + version + "/hda.qcow2"
+
+        dst_path = global_settings["working_dir"] + hostname + ".qcow2"
+    
+        shutil.copy(src_path, dst_path)
+
+        return dst_path
+        
+
+    elif image_type == "iosxe":
+
+        iosxe_dirs = []
+        for dir in os.listdir(global_settings["image_dir"]):
+            if dir[:6] == "iosxe-":
+                iosxe_dirs.append(dir)
+        iosxe_dirs.sort()
+        if version == "latest":
+            if len(iosxe_dirs) == 0:
+                print("No directories with IOS-XE found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/" + iosxe_dirs[-1] + "/hda.qcow2"
+        else:
+            if "iosxe-" + version not in iosxe_dirs:
+                print("No directory vios-" + version + " found in " + global_settings["image_dir"])
+                exit(1)
+            else:
+                src_path = global_settings["image_dir"] + "/iosxe-" + version + "/hda.qcow2"
+                
+        dst_path = global_settings["working_dir"] + hostname + ".qcow2"
+    
+        shutil.copy(src_path, dst_path)
+
+        return dst_path
+
+
+    
+def parse_network_topology(topology_config, debug=False):
+
+    if debug == True:
+        print("Getting the list of the networks from " + topology_config)
+        
+    with open(topology_config) as ymlfile:
+        cfg = yaml.load(ymlfile, yaml.SafeLoader)
+    
+    network_list = []        
+    for item in cfg:
+        for key in item:
+            network_list.append(key)
+            
+    return(network_list)
+    
+
+def parse_node_config(node_config, topology_config, debug=False):
+    
+    if debug == True:
+        print("Parsing node_config from " + node_config)
+        
+    with open(node_config) as ymlfile:
+        node_cfg = yaml.load(ymlfile, yaml.SafeLoader)
+        
+    if debug == True:
+        print("Parsing topology_config from " + topology_config)
+        
+    with open(topology_config) as ymlfile:
+        topology_cfg = yaml.load(ymlfile, yaml.SafeLoader)
+        
+    node_list = []
+    
+    for item in node_cfg:
+        node_dict = {}
+        for key in item:
+            node_dict["hostname"] = key
+        
+        for key, value in item[node_dict["hostname"]].items():
+            node_dict[key] = value 
+        # this part adds the "network" key which is itself a dictionary with interface numbers as keys and network numbers as values
+        node_dict["network"] = {}
+        for item in topology_cfg: # item = {'net1': {'R1': 1, 'R2': 1}}
+            for key in item: # key = net1
+                if node_dict["hostname"] in item[key]: # item[key] = {'R1': 1, 'R2': 1}
+                    # for IOS-XE nodes, Gi1 is used for management
+                    if node_dict["type"] == "iosxe" and item[key][node_dict["hostname"]] == 1:
+                        print("Please use interfaces starting from 2 for IOS-XE")
+                        exit(1)
+                    # if a device has several interfaces on the same network, create a key for each interface 
+                    if type(item[key][node_dict["hostname"]]) is not int:
+                        for interface in item[key][node_dict["hostname"]].split():
+                            interface = int(interface)
+                            node_dict["network"][interface] = key
+                    else:
+                        node_dict["network"][item[key][node_dict["hostname"]]] = key
+   
+        
+        node_list.append(node_dict)
+        
+        
+    return(node_list)
+
+
+def run_topology(global_settings, known_images):
+    
+    network_list = parse_network_topology(global_settings["topology_config"], global_settings["debug"])
+    node_list = parse_node_config(global_settings["node_config"], global_settings["topology_config"], global_settings["debug"])
+    
+    conn = libvirt.open(global_settings["libvirt_api"])
+    
+    
+    if global_settings["debug"] == True:
+        print("Creating networks " + str(network_list))
+   
+    for network in network_list:
+        
+        network_xml_config, virbr = create_network_xml(network, global_settings["debug"])
+     
+        if global_settings["debug"] == True:
+            print("Starting network \"" + network + "\"")
+        
+        conn.networkCreateXML(network_xml_config)
+        os.system("echo 16384 > /sys/class/net/" + virbr + "/bridge/group_fwd_mask")
+    
+        
+    for node in node_list:
+        
+        if global_settings["debug"] == True:
+            print("Starting node " + str(node["hostname"]))
+
+        try:
+            node["version"]
+        except KeyError:
+            node["version"] = "latest"
+        
+        if node["type"] == "junosvmx":
+            
+            image_path_dict = {}
+            image_path_dict = clone_image(node["hostname"], node["type"], node["version"], global_settings, known_images)
+            
+            # create network for vCP-vFP communication
+            jnet = "jnet-" + node["hostname"]
+            network_xml_config, virbr = create_network_xml(jnet, global_settings["debug"])
+            if global_settings["debug"] == True:
+                print("Starting network for vCP-vFP link \"" + jnet + "\"")
+            conn.networkCreateXML(network_xml_config)
+            
+            # start vCP
+            domain_settings = {}
+            domain_settings["hostname"] = node["hostname"]
+            domain_settings["image_path_dict"] = image_path_dict
+            domain_settings["vcpu"] = known_images[node["type"]]["vcp_vcpu"]
+            domain_settings["memory"] = known_images[node["type"]]["vcp_memory"]
+            domain_settings["jnet"] = jnet
+            # passing empty network dictionary for vCP since all interfaces are on vFP
+            domain_settings["network"] = {}
+            domain_settings["network_driver"] = known_images[node["type"]]["vcp_network_driver"]
+            domain_settings["type"] = "vmx-vcp"
+  
+            
+            if global_settings["debug"] == True:
+                print("Will start vCP:\n")
+                pprint(domain_settings)
+                print("\n")
+                
+            domain_xml_config = create_domain_xml(domain_settings, global_settings["mgmt_network"], global_settings["debug"])    
+            conn.createXML(domain_xml_config)
+            
+            # start vFP
+            domain_settings = {}
+            domain_settings["hostname"] = node["hostname"] + "-vFP"
+            domain_settings["image"] = image_path_dict["dst_path_vfp"]
+            domain_settings["vcpu"] = known_images[node["type"]]["vfp_vcpu"]
+            domain_settings["memory"] = known_images[node["type"]]["vfp_memory"]
+            domain_settings["jnet"] = jnet
+            domain_settings["network"] = node["network"]
+            domain_settings["network_driver"] = known_images[node["type"]]["vfp_network_driver"]   
+            domain_settings["type"] = "vmx-vfp"
+
+
+            if global_settings["debug"] == True:
+                print("Will start vFP:\n")
+                pprint(domain_settings)
+                print("\n")
+                
+            domain_xml_config = create_domain_xml(domain_settings, global_settings["mgmt_network"], global_settings["debug"])    
+            conn.createXML(domain_xml_config)
+            
+        else:
+            
+            domain_settings = {}
+            domain_settings["hostname"] = node["hostname"]
+            if node["type"] == "eos":
+                domain_settings["image"], domain_settings["aboot_path"] = clone_image(node["hostname"], node["type"], node["version"], global_settings, known_images) 
+            else:
+                domain_settings["image"] = clone_image(node["hostname"], node["type"], node["version"], global_settings, known_images)
+            try:
+                domain_settings["vcpu"] = node["vcpu"]
+            except KeyError:
+                domain_settings["vcpu"] = known_images[node["type"]]["vcpu"]
+            try:
+                domain_settings["memory"] = node["memory"]
+            except KeyError:
+                domain_settings["memory"] = known_images[node["type"]]["memory"]
+            domain_settings["network"] = node["network"]
+            try:
+                domain_settings["network_driver"] = node["network_driver"]
+            except KeyError:
+                domain_settings["network_driver"] = known_images[node["type"]]["network_driver"]
+            domain_settings["type"] = node["type"]
+        
+            if global_settings["debug"] == True:
+                print("Will start the following node:\n")
+                pprint(domain_settings)
+                print("\n")
+        
+            domain_xml_config = create_domain_xml(domain_settings, global_settings["mgmt_network"], global_settings["debug"])
+            conn.createXML(domain_xml_config)
+        
+    conn.close()
+
+
+def destroy_topology(global_settings, known_images):
+
+    network_list = parse_network_topology(global_settings["topology_config"], global_settings["debug"])
+    node_list = parse_node_config(global_settings["node_config"], global_settings["topology_config"], global_settings["debug"])
+    
+    conn = libvirt.open(global_settings["libvirt_api"])    
+
+    hostname_list = []
+    for node in node_list:            
+        hostname_list.append(node["hostname"])
+        if node["type"] == "junosvmx":
+            vfp_hostname = node["hostname"] + "-vFP"
+            jnet = "jnet-" + node["hostname"]
+            hostname_list.append(vfp_hostname)
+            network_list.append(jnet)
+            
+    print("Destroying nodes...")
+    
+    for domain in conn.listAllDomains():
+        if domain.name() in hostname_list:
+            domain_name = domain.name()
+            if global_settings["debug"] == True:
+                print("Destroying node \"" + domain_name + "\"")
+            domain.destroy()
+    
+     
+    print("Destroying networks...")
+        
+    for network in conn.listAllNetworks():
+        if network.name() in network_list:
+            network_name = network.name()
+            if global_settings["debug"] == True:
+                print("Destroying network \"" + network_name + "\"")
+            network.destroy()            
+                
+    
+             
+    print("Removing previously cloned images...")
+    
+    if global_settings["debug"] == True:
+        print("Passed node_list:\n")
+        pprint(node_list)
+        print("\n")
+
+    
+    for node in node_list:
+        if node["type"] in known_images:
+            if node["type"] == "junosvmx":
+                file_list = []
+                file_path = global_settings["working_dir"] + node["hostname"] + "-vcp-a" + ".qcow2"
+                file_list.append(file_path)
+                file_path = global_settings["working_dir"] + node["hostname"] + "-vcp-b" + ".qcow2"
+                file_list.append(file_path)
+                file_path = global_settings["working_dir"] + node["hostname"] + "-vcp-c" + ".img"
+                file_list.append(file_path)               
+                file_path = global_settings["working_dir"] + node["hostname"] + "-vfp" + ".img"
+                file_list.append(file_path)
+                for file_path in file_list:
+                    try:
+                        os.remove(file_path)
+                        print("Removed " + file_path)
+                    except FileNotFoundError:
+                        print("File " + file_path + " not found")
+            else:        
+                file_path = global_settings["working_dir"] + node["hostname"] + ".qcow2"
+                try:
+                    os.remove(file_path)
+                    print("Removed " + file_path)
+                except FileNotFoundError:
+                    print("File " + file_path + " not found")            
+    conn.close()
+
+
+
+def get_node_ip_list(global_settings, known_images):
+
+    # 1. Find the mac address of the first interface which should be on mgmt network
+    # 2. Find the DHCP lease with this mac address
+    # 3. Add them, along with image type and hostname, to a dictionary
+    # the idea is that we have to do this only for known images (i.e. cloned from templates)
+    # custom images are persistent, therefore config is saved locally on them
+    # ideally custom images should not run DHCP clients to avoid confusion
+    
+    node_list = parse_node_config(global_settings["node_config"], global_settings["topology_config"], global_settings["debug"])
+    
+    node_ip_list = []
+    
+    if global_settings["debug"] == True:
+        print("Connecting to " + global_settings["libvirt_api"])
+        
+    conn = libvirt.open(global_settings["libvirt_api"])       
+
+    if global_settings["debug"] == True:
+        print("\n")
+        print("Node config is as follows: \n")
+        pprint(node_list)
+        print("\n") 
+
+    mgmtNet = conn.networkLookupByName(global_settings["mgmt_network"])
+    dhcpLeases = mgmtNet.DHCPLeases()
+    
+    for node in node_list:
+        nodeObj = ""
+        nodeDict = {}
+        
+        if global_settings["debug"] == True:
+            print("Fetching runtime info for " + node["hostname"])
+            
+        nodeDict["hostname"] = node["hostname"]
+        
+        # I call it "type" in nodeRuntimeList rather than "image" in node_list to avoid confusion
+        # "type" MUST be a known image, we will use it to connect to the box
+        # and provision the config
+        
+        if node["type"] in known_images:
+            nodeDict["type"] = node["type"]
+            try:
+                node["version"]
+            except KeyError:
+                node["version"] = "latest"
+            nodeDict["version"] = node["version"]
+            
+        nodeObj = conn.lookupByName(node["hostname"])
+        nodeXMLDesc = nodeObj.XMLDesc(0)
+        nodeXMLRoot = ET.fromstring(nodeXMLDesc)
+        
+        nodeFirstInterface = nodeXMLRoot.find("./devices/interface/mac")
+        nodeFirstMac = nodeFirstInterface.attrib["address"]
+        nodeFirstNetwork = nodeXMLRoot.find("./devices/interface/source")
+        nodeFirstnetwork_name = nodeFirstNetwork.attrib["network"]
+        
+        # create empty keys for mac and IP; 
+        # for known images with DHCP leases they will be rewritten
+        
+        nodeDict["mac"] = ""
+        nodeDict["ipaddr"] = ""         
+        if nodeFirstnetwork_name == global_settings["mgmt_network"]:
+            nodeDict["mac"] = nodeFirstMac
+            
+            # find mac in the DHCP leases list and save IP
+            if node["type"] in known_images:
+            
+                if global_settings["debug"] == True:
+                    print("Looking for the DHCP lease for " + node["hostname"])
+                
+                for lease in dhcpLeases:
+                    if lease["mac"] == nodeFirstMac:
+                        nodeDict["ipaddr"] = lease["ipaddr"]
+            else:
+                if global_settings["debug"] == True:
+                    print(node["hostname"] + " is a custom image, leaving the IP field empty")
+                              
+        else:
+            print("Cannot find mac address for " + node["hostname"])
+            
+        if global_settings["debug"] == True:
+            print("Collected the following runtime info for " + node["hostname"] + "\n")
+            pprint(nodeDict)
+            print("\n") 
+        
+        node_ip_list.append(nodeDict)
+        
+    if global_settings["debug"] == True:
+        print("Closing connection to " + global_settings["libvirt_api"])
+        
+    conn.close() 
+    
+    return node_ip_list
+
+
+def save_config(global_settings, known_images):
+    
+    node_ip_list = get_node_ip_list(global_settings, known_images)
+    
+    if global_settings["debug"] == True:
+        print("Passed node IP list:\n")
+        pprint(node_ip_list)
+        print("\n")
+        
+    for node in node_ip_list:
+        if node["type"] == "junosvmx" or node["type"] == "junosvqfx":
+            node_type = "junos"
+        elif node["type"] == "iosxrv" or node["type"] == "iosxrv9000":
+            node_type = "iosxr"
+        elif node["type"] == "iosxe":
+            node_type = "ios"
+        else: 
+            node_type = node["type"]
+        driver = get_network_driver(node_type)
+        if node_type == "junos":
+            username = "admin"
+            password = "Juniper"
+        else:
+            username = "admin"
+            password = "admin"
+        if node["ipaddr"] == "":
+            print("No IP address assigned to node " + node["hostname"] + ". Skipping.")
+            continue
+        with driver(node["ipaddr"], username, password) as device:
+            config = device.get_config()["running"]
+            config_filename = global_settings["working_dir"] + node["hostname"] + "_config.txt"
+            config_file = open(config_filename, "w+")
+            config_file.write(config)
+            config_file.close()
+            print("Saved " + node["hostname"] + " config to " + config_filename)
+            
+            
+            
+def load_config(global_settings, known_images):
+
+    node_ip_list = get_node_ip_list(global_settings, known_images)   
+    
+    if global_settings["debug"] == True:
+        print("Passed node IP list:\n")
+        pprint(node_ip_list)
+        print("\n")
+        
+    for node in node_ip_list:
+        if node["type"] == "junosvmx" or node["type"] == "junosvqfx":
+            node_type = "junos"
+        elif node["type"] == "iosxrv" or node["type"] == "iosxrv9000":
+            node_type = "iosxr"
+        elif node["type"] == "iosxe":
+            node_type = "ios"
+        else: 
+            node_type = node["type"]
+        driver = get_network_driver(node_type)
+        if node_type == "junos":
+            username = "admin"
+            password = "Juniper"
+        else:
+            username = "admin"
+            password = "admin"
+        if node["ipaddr"] == "":
+            print("No IP address assigned to node " + node["hostname"] + ". Skipping.")
+            continue
+        with driver(node["ipaddr"], username, password,) as device:
+            config_filename = global_settings["working_dir"] + node["hostname"] + "_config.txt"
+            if Path(config_filename).exists() is False:
+                print("File " + config_filename + " not found. Skipping.")
+            else:
+                device.load_replace_candidate(filename=config_filename)
+                device.commit_config()
+                print("Loaded " + config_filename + " config into " + node["hostname"])
+
+
+def ansible_hosts(global_settings, known_images):
+    
+    node_ip_list = get_node_ip_list(global_settings, known_images)
+
+    eos_hosts = []
+    ios_hosts = []
+    iosxr_hosts = []
+    junos_hosts = []
+
+    print("Copy the config below into /etc/hosts")
+    print("")
+
+    for node in node_ip_list:
+        if node["ipaddr"] == "":
+            print("No IP address assigned to node " + node["hostname"] + ". Skipping.")
+            continue
+        if node["type"] == "eos":
+            eos_hosts.append(node["hostname"]) 
+            print("{0:<25} {1:}".format(node["ipaddr"], node["hostname"]))
+        elif node["type"] == "ios" or node["type"] == "iosxe":
+            ios_hosts.append(node["hostname"])
+            print("{0:<25} {1:}".format(node["ipaddr"], node["hostname"]))
+        elif node["type"] == "iosxrv" or node["type"] == "iosxrv9000":
+            iosxr_hosts.append(node["hostname"])
+            print("{0:<25} {1:}".format(node["ipaddr"], node["hostname"]))
+        elif node["type"] == "junosvmx" or node["type"] == "junosvqfx":
+            junos_hosts.append(node["hostname"])
+            print("{0:<25} {1:}".format(node["ipaddr"], node["hostname"]))
+
+    print("")
+    print("")
+
+    print("Copy the config below into /etc/ansible/hosts:")
+    print("")
+
+    if len(eos_hosts) > 0:
+        print("[eos]")
+        for item in eos_hosts:
+            print(item)
+        print("")
+        print("[eos:vars]")
+        print("ansible_network_os=eos")
+        print("ansible_user=admin")
+        print("ansible_password=admin")
+        print("ansible_become=yes")
+        print("ansible_become_method=enable")
+        print("")
+
+    if len(ios_hosts) > 0:
+        print("[ios]")
+        for item in ios_hosts:
+            print(item)
+        print("")
+        print("[ios:vars]")
+        print("ansible_network_os=cisco.ios.ios")
+        print("ansible_user=admin")
+        print("ansible_password=admin")
+        print("ansible_become=yes")
+        print("ansible_become_method=enable")
+        print("")
+
+    if len(iosxr_hosts) > 0:
+        print("[iosxr]")
+        for item in iosxr_hosts:
+            print(item)
+        print("")
+        print("[iosxr:vars]")
+        print("ansible_network_os=cisco.iosxr.iosxr")
+        print("ansible_user=admin")
+        print("ansible_password=admin")
+        print("")
+
+    if len(junos_hosts) > 0:
+        print("[junos]")
+        for item in junos_hosts:
+            print(item)
+        print("")
+        print("[junos:vars]")
+        print("ansible_connection=ansible.netcommon.netconf")
+        print("ansible_network_os=junipernetworks.junos.junos")
+        print("ansible_user=admin")
+        print("ansible_password=Juniper")
+        print("")
+
+
+
+def main():
+    # read global config file
+    
+    with open("/etc/knecht.yml", 'r') as ymlfile:
+        cfg = yaml.load(ymlfile, yaml.SafeLoader)
+
+    
+    global_settings = cfg["global"]
+    if global_settings["working_dir"] == "currentDir":
+        currentDir = os.getcwd() + "/"
+        global_settings["working_dir"] = currentDir
+    global_settings["node_config"] = global_settings["working_dir"] + global_settings["node_config"]
+    global_settings["topology_config"] = global_settings["working_dir"] + global_settings["topology_config"] 
+    known_images = cfg["known_images"]
+
+    try:
+        command = sys.argv[1]
+    except:
+        print("No command entered. Try one of these: run, destroy, save, load, leases, ssh, ansible-hosts")
+        exit(1)
+    
+    #command = "run"
+
+
+    # run the relevant function(s)
+    
+    if command == "run":
+        print("Starting topology defined in " + global_settings["node_config"] + " and " + global_settings["topology_config"])           
+        run_topology(global_settings, known_images)           
+    elif command == "destroy":
+        print("Destroying topology defined in " + global_settings["node_config"] + " and " + global_settings["topology_config"])        
+        destroy_topology(global_settings, known_images)        
+    elif command == "save":
+        print("Saving config for nodes defined in " + global_settings["node_config"] + " to directory " + global_settings["working_dir"])        
+        save_config(global_settings, known_images)        
+    elif command == "load":
+        print("Loading config into nodes defined in " + global_settings["node_config"] + " from directory " + global_settings["working_dir"])        
+        load_config(global_settings, known_images)
+    elif command == "leases":
+        print("DHCP leases for topology loaded from " + global_settings["node_config"] + " and " + global_settings["topology_config"] + ":")
+        print("")
+        leases = get_node_ip_list(global_settings, known_images)
+        pprint(leases)
+    elif command == "ssh":
+        try:
+            ssh_arg = sys.argv[2]
+        except:
+            print("Please enter node name where to SSH, or enter list")
+            exit(1)
+        node_ip_list = get_node_ip_list(global_settings, known_images)
+        if ssh_arg == "list":
+            for node in node_ip_list:
+                if node["ipaddr"] != '':
+                    print("{0:<10} {1:}".format(node["hostname"], "ssh admin@" + node["ipaddr"]))
+        else:
+            for node in node_ip_list:
+                if ssh_arg == node["hostname"]:
+                    os.system("ssh admin@" + node["ipaddr"])
+    elif command == "ansible-hosts":
+        ansible_hosts(global_settings, known_images)
+    else:
+        print("Accepted commands: run, destroy, save, load, leases, ssh, ansible-hosts")
+
+
+if __name__ == "__main__":
+    main()
