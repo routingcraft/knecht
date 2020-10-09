@@ -538,11 +538,7 @@ username admin privilege 15 password 0 admin
 !
 lldp run
 !
-```
-**```
 !for vios, replace gi1 with gi0/0
-```
-```**
 interface GigabitEthernet1
  no shutdown
  vrf forwarding MGMT
@@ -812,18 +808,14 @@ OSError: Search pattern never detected in send_command_expect: (?:[>##]\s*$|.*al
 
 This can happen if IOS takes a very long time to do config replace. To fix this, increase global_delay_factor in netmiko parameters (NAPALM uses netmiko as driver for IOS). 
 
-Open ios.py from NAPALM packages, find __init__ in the end, and add this line:
+Open ios.py from NAPALM packages, find __init__ in the end, and add "global_delay_factor":
 
 ```
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
         """NAPALM Cisco IOS Handler."""
         if optional_args is None:
             optional_args = {}
-```
-**```
         optional_args["global_delay_factor"] = 5
-```**
-```
         self.hostname = hostname
         self.username = username
         self.password = password
