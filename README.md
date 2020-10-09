@@ -6,7 +6,7 @@
 
 [Usage](#Usage)
 
-[Nodes and topology configs](#Nodes-and-topology-configs)
+[Nodes and topology configs](##Nodes-and-topology-configs)
 
 ```
 [Connecting 3rd party devices](#Connecting 3rd party devices)
