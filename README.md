@@ -4,6 +4,37 @@
 
 [Installation](#Installation)
 
+[Connecting 3rd party devices](#Connecting 3rd party devices)
+
+[Connect a VM](##Connect a VM)
+
+[Connect a docker container](##Connect a docker container)
+
+## Connect a physical interface
+## Connect a remote device over VXLAN
+# Tcpdump/Wireshark
+# Ansible
+
+
+# Supported images
+## Arista EOS
+## Cisco IOS/IOS-XE
+## Cisco IOS-XRv/XRv9000
+## Juniper vMX
+### Option 1: manually create basic config
+### Option 2: use script to generate config
+# Limitations
+
+# Troubleshooting
+
+
+# Usage
+
+## Nodes and topology configs
+
+## Using the lab
+
+
 # Summary
 
 KVM Network Emulation with Configs Handling and Templates (KNECHT) is a tool I’ve been using for a while to build networking labs. 
@@ -373,7 +404,7 @@ interface Vxlan1
 This will bridge all untagged traffic between R2 and physical hosts connected to Arista access ports on vlan 1, using VNI 1. It is possible to bridge only tagged traffic for some vlans by configuring VXLAN:VNI mappings.
 
 
-# Tcpdump/wireshark
+# Tcpdump/Wireshark
 
 Check bridge name for the given net:
 
@@ -423,7 +454,7 @@ vEOS(config-if-Et3)#mtu 9214
 vEOS(config-if-Et3)#bash sudo ip link set dev vmnicet3 mtu 9214
 ```
 
-## Cisco vIOS/IOS-XE
+## Cisco IOS/IOS-XE
 
 Cisco and automation don’t go well together. Adding new Cisco images involves some manual work unfortunately.
 
@@ -663,7 +694,7 @@ Host *
     Ciphers +aes128-cbc
 ```
 
-## Juniper  vMX
+## Juniper vMX
 
 This is not as user friendly as EOS, but still can be automated to a decent degree. Download and untar vmx bundle, create a directory junosvmx-<version> and copy the following 4 files there:
 
