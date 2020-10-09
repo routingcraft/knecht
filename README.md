@@ -24,6 +24,14 @@
 
 [Ansible](#Ansible)
 
+[Supported images](#Supported-images)
+
+* [Arista EOS](#Arista EOS)
+
+* [Cisco IOS and IOS-XE](#Cisco-IOS-and-IOS-XE)
+
+* [Cisco IOS-XRv and XRv9000](#Cisco-IOS-XRv-and-XRv9000)
+
 
 
 
@@ -448,7 +456,7 @@ vEOS(config-if-Et3)#mtu 9214
 vEOS(config-if-Et3)#bash sudo ip link set dev vmnicet3 mtu 9214
 ```
 
-## Cisco IOS/IOS-XE
+## Cisco IOS and IOS-XE
 
 Cisco and automation don’t go well together. Adding new Cisco images involves some manual work unfortunately.
 
@@ -572,7 +580,7 @@ virsh destroy ios
 virsh undefine ios
 ```
 
-## Cisco IOS-XRv/XRv9000
+## Cisco IOS-XRv and XRv9000
 
 There are 2 types of IOS-XR images: legacy XRv and newer XRv9000. The legacy images are still very useful for labs due to much lower resource requirements than XRv9000 (2 vs 16 GB RAM, 1 vs 4 vCPU). Also they can run multicast and mVPN. But only XRv9000 supports newer features like SR-TE and PCEP. Similarly to Cisco IOS images, preparing these for the first time involves a bit of manual work.
 
