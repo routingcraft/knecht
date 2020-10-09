@@ -1,4 +1,7 @@
-# KNECHT
+# Table of contents
+
+[Summary](#Summary) 
+[Installation](#Installation)
 
 # Summary
 
@@ -170,7 +173,7 @@ root@knecht:/home/dima/labs/lab4# virsh list
  12   R3-vFP   running
 ```
 
-Wait until the lab boots up and all devices get DHCP addresses. Check with “knecht leases”, or “knecht ssh list:
+Wait until the lab boots up and all devices get DHCP addresses. Check with “knecht leases”, or “knecht ssh list":
 
 ```
 root@knecht:/home/dima/labs/lab4# knecht ssh list
