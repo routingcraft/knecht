@@ -1,6 +1,6 @@
 # Table of contents
 
-[Summary](#Summary) 
+[Introduction](#Introduction) 
 
 [Installation](#Installation)
 
@@ -10,32 +10,9 @@
 
 [Connect a docker container](##Connect a docker container)
 
-## Connect a physical interface
-## Connect a remote device over VXLAN
-# Tcpdump/Wireshark
-# Ansible
 
 
-# Supported images
-## Arista EOS
-## Cisco IOS/IOS-XE
-## Cisco IOS-XRv/XRv9000
-## Juniper vMX
-### Option 1: manually create basic config
-### Option 2: use script to generate config
-# Limitations
-
-# Troubleshooting
-
-
-# Usage
-
-## Nodes and topology configs
-
-## Using the lab
-
-
-# Summary
+# Introduction
 
 KVM Network Emulation with Configs Handling and Templates (KNECHT) is a tool I’ve been using for a while to build networking labs. 
 
