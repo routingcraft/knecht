@@ -1,7 +1,3 @@
-# KNECHT
-
-Script to automate KVM to run networking labs
-
 # Table of contents
 
 [Introduction](#Introduction) 
