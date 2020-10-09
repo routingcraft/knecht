@@ -26,15 +26,15 @@
 
 [Supported images](#Supported-images)
 
-* [Arista EOS](#Arista EOS)
+* [Arista EOS](#Arista-EOS)
 
 * [Cisco IOS and IOS-XE](#Cisco-IOS-and-IOS-XE)
 
 * [Cisco IOS-XRv and XRv9000](#Cisco-IOS-XRv-and-XRv9000)
 
+* [Juniper vMX](#Juniper-vMX)
 
-
-
+  - [Option 1: manually create basic config](#Option-1-manually-create-basic-config)
 
 
 # Introduction
